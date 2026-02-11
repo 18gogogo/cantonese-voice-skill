@@ -190,7 +190,7 @@ class VoiceConversation:
             # 計算預計合成時間（每字約 1.5 秒）
             estimated_seconds = len(processed_text) * 1.5
             max_safe_seconds = 50  # 最大安全時間（秒）
-            max_safe_chars = int(max_safe_seconds / 1.5)  # 最多 33 字
+            max_safe_chars = 9  # 最多 9 字（基於實測推斷）
 
             original_text = processed_text
             text_truncated = False
