@@ -130,7 +130,7 @@ class VoiceOutputManager:
 
         return new_state
 
-    def parse_command(self, text: str) -> str:
+    def parse_command(self, text: str) -> dict:
         """
         解析用戶輸入中的語音輸出控制命令
 
@@ -138,7 +138,9 @@ class VoiceOutputManager:
             text: 用戶輸入文本
 
         Returns:
-            str: 處理後的文本（如果是純控制指令，返回空串）
+            dict: 處理結果
+                - text: 處理後的文本（如果是純控制指令，為空串）
+                - action: 控制指令類型（'enable', 'disable', 或 None）
         """
         import re
 
@@ -148,16 +150,28 @@ class VoiceOutputManager:
         if re.match(r'^[（[(\(]*$', original_text):
             self.enable()
             print(f"🎛️ 語音輸出控制: 開啟")
-            return ""  # 空串表示是純控制指令，無需處理
+            return {
+                'text': "",
+                'action': 'enable',
+                'voice_enabled': self.is_enabled()
+            }
 
         # 檢測純關閉命令：）、]、)
         elif re.match(r'^[）)\)]*$', original_text):
             self.disable()
             print(f"🎛️ 語音輸出控制: 關閉")
-            return ""  # 空串表示是純控制指令，無需處理
+            return {
+                'text': "",
+                'action': 'disable',
+                'voice_enabled': self.is_enabled()
+            }
 
         # 其他情況，不作為控制指令處理
-        return original_text
+        return {
+            'text': original_text,
+            'action': None,
+            'voice_enabled': self.is_enabled()
+        }
 
     def get_status_info(self) -> str:
         """

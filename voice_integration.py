@@ -91,8 +91,10 @@ class VoiceConversation:
 
         # 處理語音輸出控制命令
         if result['success']:
-            result['text'] = self.voice_output.parse_command(result['text'])
-            result['voice_enabled'] = self.voice_output.is_enabled()
+            parse_result = self.voice_output.parse_command(result['text'])
+            result['text'] = parse_result['text']
+            result['voice_enabled'] = parse_result['voice_enabled']
+            result['control_action'] = parse_result['action']
 
         return result
 
@@ -156,26 +158,47 @@ class VoiceConversation:
 
         Returns:
             dict: 合成結果
+                - success: 是否成功
+                - output_file: 音頻文件路徑（如果語音開啟且不是純控制指令）
+                - duration: 音頻長度
+                - action: 控制指令類型（'enable', 'disable', 或 None）
+                - message: 信息
+                - voice_enabled: 語音輸出是否啟用
         """
         # 檢查並處理語音輸出控制命令
-        processed_text = self.voice_output.parse_command(text)
+        parse_result = self.voice_output.parse_command(text)
+        processed_text = parse_result['text']
+        action = parse_result['action']
+        voice_enabled = parse_result['voice_enabled']
 
-        # 如果是純控制指令（返回空串），不生成語音
-        if not processed_text.strip():
-            result = {
-                'success': True,
-                'output_file': None,
-                'duration': 0,
-                'message': 'control_command_executed',
-                'voice_enabled': self.voice_output.is_enabled()
-            }
+        # 構建結果
+        result = {
+            'success': True,
+            'output_file': None,
+            'duration': 0,
+            'action': action,
+            'message': None,
+            'voice_enabled': voice_enabled
+        }
+
+        # 如果不是純控制指令，生成語音
+        if processed_text.strip():
+            synthesis_result = self.synthesize(processed_text, speed=speed, force=force)
+            result['output_file'] = synthesis_result.get('output_file')
+            result['duration'] = synthesis_result.get('duration', 0)
+            result['success'] = synthesis_result['success']
         else:
-            result = self.synthesize(processed_text, speed=speed, force=force)
+            # 純控制指令，設置消息
+            if action == 'enable':
+                result['message'] = 'voice_output_enabled'
+            elif action == 'disable':
+                result['message'] = 'voice_output_disabled'
 
+        # 顯示文字
         if display_text:
             print("=" * 60)
-            if result['success']:
-                if processed_text.strip():
+            if processed_text.strip():
+                if result['success']:
                     print("🔊 語音回應")
                     print("=" * 60)
                     print(f"📝 文字: {processed_text}")
@@ -183,13 +206,16 @@ class VoiceConversation:
                         print(f"📁 音頻: {result['output_file']}")
                         print(f"📏 長度: {result['duration']:.2f} 秒")
                 else:
-                    print("🎛️ 控制指令已執行")
+                    print("📝 文字回應（語音輸出已關閉）")
                     print("=" * 60)
-                    print(f"📊 語音輸出狀態: {'開啟' if self.voice_output.is_enabled() else '關閉'}")
-            else:
-                print("📝 文字回應（語音輸出已關閉）")
+                    print(f"📝 文字: {processed_text}")
+            elif action:
+                # 控制指令
+                status_text = "開啟" if action == 'enable' else "關閉"
+                print("🎛️ 控制指令已執行")
                 print("=" * 60)
-                print(f"📝 文字: {processed_text}")
+                print(f"📊 語音輸出狀態: {status_text}")
+                print(f"📝 建議回應: 語音輸出已{status_text}")
             print("=" * 60)
 
         return result
