@@ -199,6 +199,14 @@ def synthesize_speech_fixed(
                 if audio_data is None:
                     raise ValueError("未生成音頻數據（output['tts_speech'] 為空）")
 
+                # 增加音量（增益）
+                # CosyVoice3 默認輸出較小，需要增加增益以提升音量
+                audio_gain = 6.0  # 增益倍数（可根据调整：4.0, 6.0, 8.0）
+                audio_data = audio_data * audio_gain
+
+                # 简单限制防止削波
+                audio_data = np.clip(audio_data, -1.0, 1.0)
+
                 # 保存音頻文件
                 sf.write(output_file, audio_data, 24000)
 
@@ -301,3 +309,6 @@ if __name__ == '__main__':
         print(f"超時: {result['timed_out']}")
         print(f"重試次數: {result['retry_count']}")
     print("=" * 60)
+# 導出別名（兼容性）
+synthesize_speech = synthesize_speech_fixed
+
