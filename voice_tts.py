@@ -19,6 +19,8 @@ import os
 import sys
 import soundfile as sf
 import numpy as np
+import threading
+import time
 
 # 添加必要的路徑
 COSYVOICE_DIR = '/home/ubuntu/CosyVoice'
@@ -28,6 +30,10 @@ sys.path.insert(0, COSYVOICE_DIR)
 from cosyvoice.cli.cosyvoice import CosyVoice3
 
 
+# 超時設定（秒）
+DEFAULT_TIMEOUT = 50  # 默認超時 50 秒
+
+
 def synthesize_speech(
     text: str,
     output_file: str = None,
@@ -35,10 +41,11 @@ def synthesize_speech(
     reference_audio: str = None,
     reference_text: str = "This is a reference sentence for speech synthesis.",
     speed: float = 1.0,
-    use_cantonese: bool = True
+    use_cantonese: bool = True,
+    timeout: float = DEFAULT_TIMEOUT
 ) -> dict:
     """
-    使用 CosyVoice3 合成語音
+    使用 CosyVoice3 合成語音（帶超時保護）
 
     Args:
         text: 要合成的文本
@@ -48,6 +55,7 @@ def synthesize_speech(
         reference_text: 參考文本 (默認: 英文句子)
         speed: 語音速度 (默認: 1.0)
         use_cantonese: 是否使用廣東話模式 (默認: True, 使用 instruct 模式)
+        timeout: 超時時間（秒）
 
     Returns:
         dict: {
@@ -55,7 +63,8 @@ def synthesize_speech(
             'duration': float,   # 音頻長度 (秒)
             'sample_rate': int,  # 采樣率
             'success': bool,     # 是否成功
-            'error': str         # 錯誤訊息 (如果失敗)
+            'error': str,        # 錯誤訊息 (如果失敗)
+            'timed_out': bool    # 是否超時
         }
     """
     # 設定默認值
@@ -82,56 +91,94 @@ def synthesize_speech(
         'duration': 0,
         'sample_rate': 24000,
         'success': False,
-        'error': None
+        'error': None,
+        'timed_out': False
     }
 
+    # 使用線程實現超時保護
+    def _synthesize():
+        try:
+            print(f"[TTS] 開始合成: \"{text[:30]}{'...' if len(text) > 30 else ''}\"")
+            start_time = time.time()
+
+            # 初始化 CosyVoice3
+            cosyvoice = CosyVoice3(model_dir)
+
+            # 合成語音
+            if use_cantonese:
+                # 使用 instruct 模式生成廣東話
+                instruct_text = 'You are a helpful assistant. 请用广东话表达。<|endofprompt|>'
+                output = cosyvoice.inference_instruct2(
+                    tts_text=text,
+                    instruct_text=instruct_text,
+                    prompt_wav=reference_audio,
+                    zero_shot_spk_id='',
+                    stream=False,
+                    speed=speed,
+                    text_frontend=True
+                )
+            else:
+                # 使用 zero-shot 模式
+                output = cosyvoice.inference_zero_shot(
+                    tts_text=text,
+                    prompt_text=reference_text,
+                    prompt_wav=reference_audio,
+                    zero_shot_spk_id='',
+                    stream=False,
+                    speed=speed,
+                    text_frontend=True
+                )
+
+            # 提取音頻數據
+            audio_data = None
+            for chunk in output:
+                if 'tts_speech' in chunk:
+                    audio_data = chunk['tts_speech'][0]  # numpy array
+                    break
+
+            if audio_data is None:
+                raise RuntimeError("語音合成失敗：無音頻輸出")
+
+            # 保存音頻文件
+            sf.write(output_file, audio_data, 24000)
+
+            # 計算音頻長度
+            duration = len(audio_data) / 24000
+
+            elapsed_time = time.time() - start_time
+            print(f"[TTS] 合成完成: {duration:.2f}s (耗時: {elapsed_time:.2f}s)")
+
+            result['duration'] = duration
+            result['success'] = True
+
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            print(f"[TTS] 合成失敗: {e} (耗時: {elapsed_time:.2f}s)")
+            result['error'] = str(e)
+            result['success'] = False
+
     try:
-        # 初始化 CosyVoice3
-        cosyvoice = CosyVoice3(model_dir)
+        # 使用線程並設置超時
+        thread = threading.Thread(target=_synthesize)
+        thread.daemon = True  # 設為守護線程
+        thread.start()
 
-        # 合成語音
-        if use_cantonese:
-            # 使用 instruct 模式生成廣東話
-            instruct_text = 'You are a helpful assistant. 请用广东话表达。<|endofprompt|>'
-            output = cosyvoice.inference_instruct2(
-                tts_text=text,
-                instruct_text=instruct_text,
-                prompt_wav=reference_audio,
-                zero_shot_spk_id='',
-                stream=False,
-                speed=speed,
-                text_frontend=True
-            )
+        start_time = time.time()
+        thread.join(timeout=timeout)
+        elapsed_time = time.time() - start_time
+
+        if thread.is_alive():
+            # 超時
+            print(f"[TTS] ⚠️ 超時: {elapsed_time:.2f}s > {timeout}s")
+            result['success'] = False
+            result['error'] = f'Synthesis timeout after {timeout:.1f}s'
+            result['timed_out'] = True
+        elif result['success']:
+            # 成功
+            pass
         else:
-            # 使用 zero-shot 模式
-            output = cosyvoice.inference_zero_shot(
-                tts_text=text,
-                prompt_text=reference_text,
-                prompt_wav=reference_audio,
-                zero_shot_spk_id='',
-                stream=False,
-                speed=speed,
-                text_frontend=True
-            )
-
-        # 提取音頻數據
-        audio_data = None
-        for chunk in output:
-            if 'tts_speech' in chunk:
-                audio_data = chunk['tts_speech'][0]  # numpy array
-                break
-
-        if audio_data is None:
-            raise RuntimeError("語音合成失敗：無音頻輸出")
-
-        # 保存音頻文件
-        sf.write(output_file, audio_data, 24000)
-
-        # 計算音頻長度
-        duration = len(audio_data) / 24000
-
-        result['duration'] = duration
-        result['success'] = True
+            # 失敗（錯誤）
+            pass
 
     except Exception as e:
         result['error'] = str(e)

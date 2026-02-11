@@ -103,7 +103,8 @@ class VoiceConversation:
         text: str,
         output_file: str = None,
         speed: float = 1.0,
-        force: bool = False
+        force: bool = False,
+        timeout: float = 50  # 超時時間（秒）
     ) -> dict:
         """
         合成語音輸出
@@ -113,6 +114,7 @@ class VoiceConversation:
             output_file: 輸出文件路徑 (默認: 自動生成)
             speed: 語音速度
             force: 強制合成（忽略語音輸出狀態）
+            timeout: 超時時間（秒）
 
         Returns:
             dict: 合成結果
@@ -137,7 +139,8 @@ class VoiceConversation:
             text=text,
             output_file=output_file,
             model_dir=self.model_dir,
-            speed=speed
+            speed=speed,
+            timeout=timeout
         )
 
     def respond_speech(
@@ -145,7 +148,8 @@ class VoiceConversation:
         text: str,
         display_text: bool = True,
         speed: float = 1.0,
-        force: bool = False
+        force: bool = False,
+        timeout: float = 50  # 超時時間（秒）
     ) -> dict:
         """
         發送語音回應 (帶顯示文字)
@@ -183,10 +187,37 @@ class VoiceConversation:
 
         # 如果不是純控制指令，生成語音
         if processed_text.strip():
-            synthesis_result = self.synthesize(processed_text, speed=speed, force=force)
+            # 計算預計合成時間（每字約 1.5 秒）
+            estimated_seconds = len(processed_text) * 1.5
+            max_safe_seconds = 50  # 最大安全時間（秒）
+            max_safe_chars = int(max_safe_seconds / 1.5)  # 最多 33 字
+
+            original_text = processed_text
+            text_truncated = False
+
+            # 檢查是否需要截斷
+            if len(processed_text) > max_safe_chars:
+                processed_text = processed_text[:max_safe_chars] + "..."
+                text_truncated = True
+                print(f"⚠️ 文本過長（{len(original_text)} 字，預計 {estimated_seconds:.1f} 秒 > 50 秒）")
+                print(f"✂️  自動截斷為 {max_safe_chars} 字以保證在 50 秒內完成")
+            else:
+                # 正常文本，顯示進度提示
+                print(f"⏳ 語音合成中...（預計 {estimated_seconds:.1f} 秒）")
+
+            synthesis_result = self.synthesize(processed_text, speed=speed, force=force, timeout=timeout)
+
+            # 檢查是否超時
+            if synthesis_result.get('timed_out'):
+                print("⚠️ 語音合成超時！僅返回文字回應")
+                result['timed_out'] = True
+                result['message'] = 'synthesis_timeout'
+
             result['output_file'] = synthesis_result.get('output_file')
             result['duration'] = synthesis_result.get('duration', 0)
             result['success'] = synthesis_result['success']
+            result['original_text'] = original_text  # 保存原始文本
+            result['text_truncated'] = text_truncated  # 記錄是否截斷
         else:
             # 純控制指令，設置消息
             if action == 'enable':
@@ -198,17 +229,36 @@ class VoiceConversation:
         if display_text:
             print("=" * 60)
             if processed_text.strip():
-                if result['success']:
-                    print("🔊 語音回應")
+                if result.get('timed_out'):
+                    # 超時情況
+                    print("⚠️ 語音合成超時")
                     print("=" * 60)
-                    print(f"📝 文字: {processed_text}")
-                    if result.get('output_file'):
+                    print(f"📝 文字: {original_text}")
+                    print(f"⏱️  說明: 合成時間超過 {timeout} 秒，僅返回文字")
+                elif result['success'] and result.get('output_file'):
+                    # 成功生成語音
+                    if result.get('text_truncated'):
+                        print("✂️  文本已自動截斷")
+                        print("=" * 60)
+                        print(f"📝 原始文本: {original_text}")
+                        print(f"📝 合成文本: {processed_text}")
+                        print(f"📁 音頻: {result['output_file']}")
+                        print(f"📏 長度: {result['duration']:.2f} 秒")
+                        print(f"💡 說明: 文本過長已截斷以保證在 50 秒內完成")
+                    else:
+                        print("🔊 語音回應")
+                        print("=" * 60)
+                        print(f"📝 文字: {processed_text}")
                         print(f"📁 音頻: {result['output_file']}")
                         print(f"📏 長度: {result['duration']:.2f} 秒")
                 else:
-                    print("📝 文字回應（語音輸出已關閉）")
+                    # 語音輸出關閉或失敗
+                    print("📝 文字回應")
                     print("=" * 60)
-                    print(f"📝 文字: {processed_text}")
+                    original_full = result.get('original_text', original_text)
+                    print(f"📝 文字: {original_full}")
+                    if result.get('message'):
+                        print(f"ℹ️  狀態: {result['message']}")
             elif action:
                 # 控制指令
                 status_text = "開啟" if action == 'enable' else "關閉"
